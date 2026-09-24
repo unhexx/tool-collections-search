@@ -1,0 +1,34 @@
+name: tool-collections-search
+
+services:
+  tool:
+    build: .
+    image: tool-collections-search:local
+    ports:
+      - "127.0.0.1:8092:8092"
+    environment:
+      TOOL_HOST: "0.0.0.0"
+      TOOL_PORT: "8092"
+      TOOL_TOKEN: "${TOOL_TOKEN:-local}"
+      COLLECTIONS_ROOT: /app/corpus
+      COLLECTIONS_DB: /tmp/tool-data/collections.sqlite
+
+    volumes:
+      - ./corpus:/app/corpus:ro
+      - collections_data:/tmp/tool-data
+    security_opt:
+      - "no-new-privileges:true"
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    mem_limit: 256m
+    pids_limit: 128
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8092/healthz')"]
+      interval: 20s
+      timeout: 5s
+      start_period: 10s
+      retries: 5
