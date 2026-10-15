@@ -1,6 +1,7 @@
 """Local collections_search / file_search: SQLite FTS5 over a data directory."""
 from __future__ import annotations
 
+import hashlib
 import os
 import sqlite3
 from pathlib import Path
@@ -43,29 +44,61 @@ def _connect() -> sqlite3.Connection:
     con.execute(
         "CREATE VIRTUAL TABLE IF NOT EXISTS docs USING fts5(path, body, tokenize='unicode61')"
     )
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS files (
+            path TEXT PRIMARY KEY,
+            digest TEXT NOT NULL
+        )
+        """
+    )
     return con
+
+
+def _digest(body: str) -> str:
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 
 def index_corpus(force: bool = False) -> int:
     root = _root()
     root.mkdir(parents=True, exist_ok=True)
     con = _connect()
-    if force:
-        con.execute("DELETE FROM docs")
-    count = 0
-    existing = {row["path"] for row in con.execute("SELECT path FROM docs")}
-    for p in root.rglob("*"):
-        if not p.is_file() or p.suffix.lower() not in _TEXT_EXT:
-            continue
-        rel = str(p.relative_to(root))
-        if rel in existing and not force:
-            continue
-        body = p.read_text(encoding="utf-8", errors="replace")[:200_000]
-        con.execute("INSERT INTO docs(path, body) VALUES (?, ?)", (rel, body))
-        count += 1
-    con.commit()
-    con.close()
-    return count
+    try:
+        if force:
+            con.execute("DELETE FROM docs")
+            con.execute("DELETE FROM files")
+        known = {
+            row["path"]: row["digest"]
+            for row in con.execute("SELECT path, digest FROM files")
+        }
+        doc_counts: dict[str, int] = {}
+        for row in con.execute("SELECT path FROM docs"):
+            doc_counts[row["path"]] = doc_counts.get(row["path"], 0) + 1
+        count = 0
+        seen: set[str] = set()
+        for p in root.rglob("*"):
+            if not p.is_file() or p.suffix.lower() not in _TEXT_EXT:
+                continue
+            rel = str(p.relative_to(root))
+            body = p.read_text(encoding="utf-8", errors="replace")[:200_000]
+            digest = _digest(body)
+            seen.add(rel)
+            if known.get(rel) == digest and doc_counts.get(rel) == 1:
+                continue
+            con.execute("DELETE FROM docs WHERE path = ?", (rel,))
+            con.execute("DELETE FROM files WHERE path = ?", (rel,))
+            con.execute("INSERT INTO docs(path, body) VALUES (?, ?)", (rel, body))
+            con.execute(
+                "INSERT INTO files(path, digest) VALUES (?, ?)", (rel, digest)
+            )
+            count += 1
+        for rel in (set(known) | set(doc_counts)) - seen:
+            con.execute("DELETE FROM docs WHERE path = ?", (rel,))
+            con.execute("DELETE FROM files WHERE path = ?", (rel,))
+        con.commit()
+        return count
+    finally:
+        con.close()
 
 
 def run(arguments: dict[str, Any]) -> dict[str, Any]:
