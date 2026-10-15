@@ -101,6 +101,13 @@ def index_corpus(force: bool = False) -> int:
         con.close()
 
 
+def _fts_query(query: str) -> str:
+    pieces = query.split()
+    if not pieces:
+        raise ValueError("query is required")
+    return " AND ".join('"' + piece.replace('"', '""') + '"' for piece in pieces)
+
+
 def run(arguments: dict[str, Any]) -> dict[str, Any]:
     query = arguments.get("query")
     if not isinstance(query, str) or not query.strip():
@@ -113,27 +120,38 @@ def run(arguments: dict[str, Any]) -> dict[str, Any]:
     limit = max(1, min(limit, 50))
     path_filter = arguments.get("path")
     con = _connect()
-    sql = "SELECT path, snippet(docs, 1, '[', ']', ' … ', 16) AS snip FROM docs WHERE docs MATCH ?"
-    params: list[Any] = [query]
-    if isinstance(path_filter, str) and path_filter:
-        sql += " AND path LIKE ?"
-        params.append(f"%{path_filter}%")
-    sql += " LIMIT ?"
-    params.append(limit)
     try:
-        rows = list(con.execute(sql, params))
-    except sqlite3.OperationalError:
-        # fallback: LIKE search if MATCH syntax fails
-        rows = list(con.execute(
-            "SELECT path, substr(body,1,240) AS snip FROM docs WHERE body LIKE ? LIMIT ?",
-            (f"%{query}%", limit),
-        ))
-    con.close()
-    return {
-        "hits": [{"path": r["path"], "snippet": r["snip"]} for r in rows],
-        "count": len(rows),
-        "root": str(_root()),
-    }
+        sql = (
+            "SELECT path, snippet(docs, 1, '[', ']', ' … ', 16) AS snip "
+            "FROM docs WHERE docs MATCH ?"
+        )
+        params: list[Any] = [_fts_query(query)]
+        if isinstance(path_filter, str) and path_filter:
+            sql += " AND path LIKE ?"
+            params.append(f"%{path_filter}%")
+        sql += " ORDER BY rank LIMIT ?"
+        params.append(limit)
+        try:
+            rows = list(con.execute(sql, params))
+        except sqlite3.OperationalError:
+            rows = None
+        if rows is None:
+            # Substring search: raw query, same path predicate, no rank column.
+            sql = "SELECT path, substr(body,1,240) AS snip FROM docs WHERE body LIKE ?"
+            params = [f"%{query}%"]
+            if isinstance(path_filter, str) and path_filter:
+                sql += " AND path LIKE ?"
+                params.append(f"%{path_filter}%")
+            sql += " LIMIT ?"
+            params.append(limit)
+            rows = list(con.execute(sql, params))
+        return {
+            "hits": [{"path": r["path"], "snippet": r["snip"]} for r in rows],
+            "count": len(rows),
+            "root": str(_root()),
+        }
+    finally:
+        con.close()
 
 
 def main() -> None:
