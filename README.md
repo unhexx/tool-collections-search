@@ -28,6 +28,18 @@ curl -sS -H 'Authorization: Bearer local' -H 'Content-Type: application/json' \
   -d '{"arguments":{}}' http://127.0.0.1:8092/v1/invoke
 ```
 
+## Agentic loop
+
+Full cycle (Orchestrator → Coder → Tester → Debugger → Reviewer) is installed against Agentix 3.13.0. `agentic_loop_template` is a symlink to the sibling tree, not a copy.
+
+```bash
+bash Agent-Init.sh
+source .venv/bin/activate
+python -m memory.supervisor status
+```
+
+Role prompt: `agentic_loop_template/prompts/short_orchestrator_prompt.md`. Agent instructions: `AGENTS.md`.
+
 ## xAI client-side schema
 
 `GET /schema` returns the function-calling descriptor. Register it next to any
